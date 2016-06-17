@@ -1,0 +1,3 @@
+Pin Brown = connect to Arduino - / GND
+Pin Orange = connect to arduino +5V
+Pin Yellow = digital port > test example digital(9)

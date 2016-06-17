@@ -1,0 +1,4 @@
+connection : 
+S > Signal
+middle > 5v
+- > ground
