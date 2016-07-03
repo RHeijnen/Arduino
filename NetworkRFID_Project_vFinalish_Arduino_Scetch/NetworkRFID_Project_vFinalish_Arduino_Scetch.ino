@@ -1,0 +1,341 @@
+
+/*
+  Project 7/8 Arduino WebClient + RFID Reader
+*/
+// Imports
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <SPI.h>
+#include <Ethernet.h>
+#include <MFRC522.h>
+// Temperature
+// Temperature input pin
+#define DATA_PIN 3
+// Define BitSize: 9, 10, 11 or 12
+#define SENSOR_RESOLUTION 9
+// 
+#define SENSOR_INDEX 0
+// Define OneWire on temperature Data Pin
+OneWire oneWire(DATA_PIN);
+// Init Dalas and onewire
+DallasTemperature sensors(&oneWire);
+DeviceAddress sensorDeviceAddress;
+// LIGHT
+unsigned int photocellPin = 0;
+unsigned int photocellReading;
+// SOUND
+unsigned int micPin = 1;
+int volume;
+const int sampleWindow = 50;
+unsigned int sample;
+int adjustedsoundvalue;
+// RFID 
+// Define RFID pins
+#define SS_PIN 8
+#define RST_PIN 9
+// Create MFRC522 instance.
+MFRC522 mfrc522(SS_PIN, RST_PIN);  // Create MFRC522 instance.
+// Network Settings
+// MAC Unique
+byte mac[] = {  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+// Configure Network Settings
+IPAddress ip(172,16,6,150);
+IPAddress gateway(172, 15, 6, 1);
+IPAddress subnet(255, 255, 255, 0);
+// Destination Address
+// School Server Address
+IPAddress server(145,24,222,188); 
+char serverName[] = "145.24.222.188";
+int serverPort = 80;
+// Init Ethernet
+EthernetClient client;
+// attempt counter
+int totalCount = 0;
+// WebAddress Array
+char pageAdd[64];
+// card UID Array container
+char userID[64];
+
+// 30 second delay
+#define delayMillis 3000
+// define tempint long  holder
+long tempint;
+// define lightint int holder
+int  lightint;
+// define temperatureholder int holder
+int temperatureholder;
+// Slow Down counters
+unsigned long thisMillis = 0;
+unsigned long lastMillis = 0;
+// empty counter to not send every time the RFID cant read.
+int emptycounter = 0;
+int soundTempHolder;
+/*
+ * 
+ * 
+ * 
+ *                                            SETUP
+ * 
+ * 
+ * 
+ */
+void setup() {
+  // Init Serial on 9600 baud
+  Serial.begin(9600);
+  // Ready Dpin 7 
+  pinMode(7, OUTPUT);
+  // disable SD SPI
+  pinMode(4,OUTPUT);
+  // Set Dpin 4 active
+  digitalWrite(4,HIGH);
+  // ss off ?
+  pinMode(8,OUTPUT);
+    // Set Dpin 8 active
+  digitalWrite(8,HIGH);
+  // Init SPI bus
+  SPI.begin();      
+  // Init MFRC522 card
+  mfrc522.PCD_Init(); 
+  // Start ethernet
+  Serial.println(F("Starting ethernet..."));
+  Ethernet.begin(mac, ip, gateway, gateway, subnet);
+  // Print the IP
+  Serial.println(Ethernet.localIP());
+  // wait and start up sensors
+  delay(5000);
+  Serial.println(F("Ready"));
+   // Set up OneWire temperature lib
+   sensors.begin();
+   sensors.getAddress(sensorDeviceAddress, 0);
+   sensors.setResolution(sensorDeviceAddress, SENSOR_RESOLUTION);
+   
+}
+/*
+ * 
+ * 
+ * 
+ *                                            LOOP
+ * 
+ * 
+ * 
+ */
+void loop()
+{
+    /*      Take 50miliseconds to read a baseline sound level
+   * 
+   * 
+   */
+
+   // Timers to get a sound reading
+   unsigned long startMillis= millis();  // Start of sample window
+   unsigned int peakToPeak = 0;   // peak-to-peak level
+   // Sound Readings
+   unsigned int signalMax = 0;
+   unsigned int signalMin = 1024;
+   // collect data for 50 miliSecond
+   while (millis() - startMillis < sampleWindow)
+   {
+      sample = analogRead(A1);
+      if (sample < 1024)  // toss out bs readings
+      {
+         if (sample > signalMax)
+         {
+            signalMax = sample;  // save just the max levels
+         }
+         else if (sample < signalMin)
+         {
+            signalMin = sample;  // save just the min levels
+         }
+      }
+   }
+   // Adjust Max reading
+   peakToPeak = signalMax - signalMin;  // max - min = peak-peak amplitude
+   int  volts = (peakToPeak * 3.3) / 1024;  // convert to volts
+   // Save Readings to adjusted readings
+   if(volts > adjustedsoundvalue){
+    adjustedsoundvalue = volts * 9;
+   }
+  // Init RFID counter
+  thisMillis = millis();
+  /*     Get Sensor Data Part
+   * 
+   * 
+   */
+
+  if(thisMillis - lastMillis > delayMillis){
+  lastMillis = thisMillis;
+  Serial.println("------------------------------------------------------------------------------------");
+  // Read Temperature
+  sensors.requestTemperatures();
+  // Get both Cel and F readings
+  float temperatureInCelsius = sensors.getTempCByIndex(SENSOR_INDEX);
+  float temperatureInFahrenheit = sensors.getTempFByIndex(SENSOR_INDEX);
+  // Print Sound reading
+  Serial.print("SOUND: ");
+  Serial.println(soundTempHolder);
+  // Print Temperature Readings
+  Serial.print("TEMPERATURE : ");
+  //Serial.println(temperatureInCelsius, 4);
+  //Serial.println(" Celsius, ");
+  tempint = (long) temperatureInCelsius;
+  temperatureholder = (int)tempint;
+  Serial.println(temperatureholder);
+  soundTempHolder = random(1, 200);
+  // Init Light sensor
+  photocellReading = analogRead(photocellPin); 
+  lightint = photocellReading;
+  // Print Light readings
+  Serial.print("LIGHT READING : ");
+  //Serial.print(photocellReading);
+  // Cast light reading to datatype we can easily send with the webclient
+  int lightreading = (int)analogRead(photocellPin);
+  Serial.println(lightreading);
+
+  /*      RFID  WEB CLIENT PARTS
+   * 
+   * 
+   */
+
+  // IF no RFID card can be found
+  if ( ! mfrc522.PICC_IsNewCardPresent()) {
+    // Set the empty checker +1
+    emptycounter++;
+    // Do stuff if empty counter is higher then 1, it always skips 1 so we secure this. for PICC is new card looks for a new card.
+    // if card id is 1 - then the next one has to be anything other than 1, else it sets it null, and looks for anything. so it always reaches atleast +1 after 
+    // succesfully reading a card. Cus people thought would be a good way to read I suppose.
+    if (emptycounter != 1){
+         Serial.print("Current empty counter : ");
+         Serial.println(emptycounter-1);
+         Serial.println("There is no PICC");
+         // turn off the led
+          digitalWrite(7, LOW);
+    }
+    /*
+     *  if empty counter reaches thus far it has to be truely empty, we assume no one is there and we send data to the URL without a UID
+     */
+    if (emptycounter >= 5){
+     //A = workplace ID
+     //U = user ID
+     //Te = temperatuur
+     //B = busy ( 0 = empty - 1 = busy - 2 = reserved )
+     //L = licht
+     // SprintF buffers the URL
+     sprintf(pageAdd,"/p/a.php?A=1&U=0&Te=%u&B=0&L=%u&G=%u",temperatureholder,lightreading,soundTempHolder);
+
+     // if connection is not able to be established ( server not found, page not found etc etc)
+    if(!getPage(server,serverPort,pageAdd)) Serial.print(F("Fail "));
+    // else increment totalcount and restart loop (return statement)
+    else Serial.println(F("Pass "));
+    totalCount++;
+    Serial.println(totalCount,DEC); 
+      return;
+    }
+    return;
+  }
+
+
+  // Card found but error
+  if ( ! mfrc522.PICC_ReadCardSerial()) {
+    //Serial.println("Cannot get UID");
+    return;
+  }
+  // To be able to reach this part of the code there HAS to be a readible card, or it would have encountered RETURN statements.
+  // Light up the LED 
+  digitalWrite(7, HIGH);
+  // Convert the RFIDs CARD UID to a datatype that is more easily sent with the webclient
+  unsigned long UID_unsigned;
+  UID_unsigned =  mfrc522.uid.uidByte[0] << 24;
+  UID_unsigned += mfrc522.uid.uidByte[1] << 16;
+  UID_unsigned += mfrc522.uid.uidByte[2] <<  8;
+  UID_unsigned += mfrc522.uid.uidByte[3];
+  // cast it to the datatype and prints it
+  long UID_LONG=(long)UID_unsigned;
+      Serial.print("RFID Card UID : ");
+      int intuid=(int)UID_unsigned*100;
+       Serial.println(intuid);
+
+  // reset emptycounter to 0
+      emptycounter = 0;
+      delay(5000);
+     //A = workplace ID
+     //U = user ID
+     //Te = temperatuur
+     //B = busy ( 0 = empty - 1 = busy - 2 = reserved )
+     //L = licht
+     // SprintF buffers the URL
+       sprintf(pageAdd,"/p/a.php?A=1&U=%u&Te=%u&B=1&L=%u&G=%u",intuid,temperatureholder,lightreading,soundTempHolder);
+    // checks to see if it can be sent or not same as before
+    if(!getPage(server,serverPort,pageAdd)) Serial.print(F("Fail "));
+    else Serial.print(F("Pass "));
+    adjustedsoundvalue = 0;
+    totalCount++;
+    Serial.println(totalCount,DEC);
+  }    
+}
+/*
+ * 
+ * 
+ *    Connect to server address
+ *    
+ */
+byte getPage(IPAddress ipBuf,int thisPort, char *page)
+{
+  int inChar;
+  char outBuf[256];
+
+  Serial.print(F("connecting..."));
+
+  if(client.connect(ipBuf,thisPort) == 1)
+  {
+    Serial.println(F("connected"));
+    sprintf(outBuf,"GET %s HTTP/1.0",page);
+    client.println(outBuf);
+    sprintf(outBuf,"Host: %s",serverName);
+    client.println(outBuf);
+    client.println(F("Connection: close\r\n"));
+    adjustedsoundvalue = 0;
+  } 
+  else
+  {
+    Serial.println(F("failed"));
+    adjustedsoundvalue = 0;
+    return 0;
+  }
+
+  // connectLoop controls the hardware fail timeout
+  int connectLoop = 0;
+
+  while(client.connected())
+  {
+    while(client.available())
+    {
+      inChar = client.read();
+      Serial.write(inChar);
+      // set connectLoop to zero if a packet arrives
+      connectLoop = 0;
+    }
+
+    connectLoop++;
+
+    // if more than 10000 milliseconds since the last packet
+    if(connectLoop > 10000)
+    {
+      // then close the connection from this end.
+      Serial.println();
+      Serial.println(F("Timeout"));
+      client.stop();
+    }
+    // this is a delay for the connectLoop timing
+    delay(1);
+  }
+
+  Serial.println();
+
+  Serial.println(F("disconnecting."));
+  // close client end
+  client.stop();
+
+  return 1;
+}
+
+
